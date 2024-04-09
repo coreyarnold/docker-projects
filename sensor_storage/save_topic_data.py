@@ -12,7 +12,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS MQTT_MESSAGES
 
 # MQTT broker settings
 broker_address = os.environ["MQTT_BROKER"]
-port = os.environ["MQQT_BROKER_PORT"]
+port = int(os.environ["MQQT_BROKER_PORT"])
 username = os.environ["MQTT_USER"]
 password = os.environ["MQTT_PASS"]
 

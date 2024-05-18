@@ -5,6 +5,8 @@ import os
 from dotenv import load_dotenv
 import paho.mqtt.client as mqtt
 from datetime import datetime
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 
 load_dotenv()
 def getEnvVar(token_name):
@@ -45,6 +47,11 @@ db_connection = mysql.connector.connect(
 )
 db_cursor = db_connection.cursor()
 
+# InfluxDB connection parameters
+influx_token = getEnvVar('INFLUXDB_TOKEN')
+influx_org = getEnvVar('INFLUXDB_ORG')
+influx_bucket = getEnvVar('INFLUXDB_BUCKET')
+influx_url = getEnvVar('INFLUXDB_HOST')
 
 # Callback when the client connects to the broker
 def on_connect(client, userdata, flags, rc):
@@ -54,14 +61,28 @@ def on_connect(client, userdata, flags, rc):
 # Callback when a message is received from the broker
 def on_message(client, userdata, msg):
     print("Received message" + str(msg.payload) + " on topic: " + msg.topic)
-#    saveToMariaDB(datetime.now().strftime('%Y-%m-%d %H:%M:%S'), msg.topic, msg.payload.decode(), msg.payload.decode('utf-8'))
-    
+    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    try:
+        saveToMariaDB(timestamp, msg.topic, msg.payload.decode('utf-8'))
+    except:
+        print(f"Couldn't save to MariaDB: ({timestamp},{msg.topic},{msg.payload})")
+
+    try:
+        timestamp,value = t, v = msg.payload.decode('utf-8').split(" - ")  # messages look like <timestamp> - <value>
+    except:
+        print(f"Couldn't get timestamp and value from: {msg.payload}")
+    else:
+        try:
+            saveToInfluxDB(timestamp, msg.topic, round(float(value),2))
+        except:
+            print(f"Couldn't save to InfluxDB: ({timestamp},{msg.topic},{value})")
+
     saveToSQLite(msg)
 
 # Function to insert data into MariaDB table
-def saveToMariaDB(timestamp, topic, payload, raw_message):
-    sql = f"INSERT INTO {table_name} (timestamp,topic, message_value, message) VALUES (%s, %s, %s, %s)"
-    val = (timestamp, topic, payload, raw_message)
+def saveToMariaDB(timestamp, topic, raw_message):
+    sql = f"INSERT INTO {table_name} (timestamp,topic, message) VALUES (%s, %s, %s)"
+    val = (timestamp, topic, raw_message)
     db_cursor.execute(sql, val)
     db_connection.commit()
     print("Data inserted into MariaDB table")
@@ -74,6 +95,29 @@ def saveToSQLite(msg):
     }
     c.execute("INSERT INTO MQTT_MESSAGES (topic, message, timestamp) VALUES (?, ?, ?)", (msg.topic, json.dumps(message_data), message_data['timestamp']))
     conn.commit()
+    
+def saveToInfluxDB(timestamp, topic, value):
+    
+    # Create InfluxDB client
+    client = InfluxDBClient(url=influx_url, token=influx_token, org=influx_org)
+    
+    # Create InfluxDB query API
+    query_api = client.query_api()
+            
+    # Create InfluxDB write API
+    write_api = client.write_api(write_options=SYNCHRONOUS)
+    
+    # Create a Point for the temperature reading with specified timestamp and tags
+    point = Point("MQTT_MESSAGES") \
+        .field("value", value) \
+        .tag("topic", topic) \
+        .time(timestamp)
+    
+    # Write the data point to the 'weather' bucket
+    write_api.write(bucket=influx_bucket, record=point)
+    
+    print(f"Sensor reading {value} saved to InfluxDB with tags: topic={topic}, timestamp={timestamp}")
+    
 
 print("setting up mqtt client")
 # MQTT client setup
